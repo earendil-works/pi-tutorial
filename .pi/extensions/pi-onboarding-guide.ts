@@ -125,9 +125,9 @@ const STEPS: Record<StepId, StepMeta> = {
 		title: "Create your own extension and reload (/reload)",
 		hint: "A small extension was created or updated and reloaded in Pi.",
 		prompt:
-			"Create a tiny custom Pi extension in .pi/extensions/ that adds one useful command for this project, then tell me to run /reload.",
+			"Create a tiny custom Pi extension in .pi/extensions/ that adds one useful command for this project.",
 		promptExamples: [
-			"Help me create a tiny Pi extension for this project, then tell me to run /reload.",
+			"Help me create a tiny Pi extension for this project.",
 			"Scaffold a minimal extension in .pi/extensions/ that adds one useful command.",
 		],
 	},
@@ -544,29 +544,6 @@ export default function onboardingGuideExtension(pi: ExtensionAPI) {
 			}
 
 			ctx.ui.notify("Usage: /onboard [status|prompt]", "info");
-		},
-	});
-
-	pi.registerCommand("onboard-debug", {
-		description: "Simulate onboarding events like reload/tree",
-		handler: async (args, ctx) => {
-			const command = (args ?? "").trim();
-			if (command === "reload") {
-				queueHiddenEvent(
-					`[TUTORIAL EVENT]\nThe extension runtime just reloaded successfully. If the tutorial step "Build extension" is otherwise satisfied and not already complete, you may mark it done with ${STEP_TOOL_NAME}.`,
-				);
-				ctx.ui.notify("Queued simulated /reload event for the next turn.", "info");
-				return;
-			}
-			if (command === "tree") {
-				queueHiddenEvent(
-					`[TUTORIAL EVENT]\nThe user used /tree and chose summarization. If the tutorial step "Rewind with /tree" is not already complete, mark it done with ${STEP_TOOL_NAME}.`,
-				);
-				ctx.ui.notify("Queued simulated /tree event for the next turn.", "info");
-				return;
-			}
-
-			ctx.ui.notify("Usage: /onboard-debug [reload|tree]", "info");
 		},
 	});
 
