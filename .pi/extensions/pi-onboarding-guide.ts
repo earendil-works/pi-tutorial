@@ -112,11 +112,11 @@ const STEPS: Record<StepId, StepMeta> = {
 	tree: {
 		label: "Rewind with /tree",
 		title: "Use /tree to rewind and summarize a branch",
-		hint: `The user used /tree to jump back to the ${IMPLEMENTATION_CHECKPOINT_LABEL} checkpoint and chose summarization.`,
+		hint: `The user used /tree to jump back to the ${IMPLEMENTATION_CHECKPOINT_LABEL} checkpoint and chose Summarize (not "No summary").`,
 		prompt:
-			`Let's use /tree to jump back to the ${IMPLEMENTATION_CHECKPOINT_LABEL} checkpoint, choose Summarize, and then continue from there with a cleaner context.`,
+			`Let's use /tree to jump back to the ${IMPLEMENTATION_CHECKPOINT_LABEL} checkpoint, choose Summarize (not "No summary"), and then continue from there with a cleaner context.`,
 		promptExamples: [
-			`Let's use /tree to jump back to the ${IMPLEMENTATION_CHECKPOINT_LABEL} checkpoint, choose Summarize, and then continue from there.`,
+			`Let's use /tree to jump back to the ${IMPLEMENTATION_CHECKPOINT_LABEL} checkpoint, choose Summarize (not "No summary"), and then continue from there.`,
 			`Please use /tree, select ${IMPLEMENTATION_CHECKPOINT_LABEL}, choose Summarize, and then let's build the extension from that cleaner branch.`,
 		],
 	},
@@ -279,6 +279,7 @@ export default function onboardingGuideExtension(pi: ExtensionAPI) {
 	let shownHints: HintId[] = [];
 	let pendingTutorialEvents: string[] = [];
 	let kickoffSent = false;
+	let sawTreeSummarizationEvent = false;
 
 	pi.registerMessageRenderer(KICKOFF_MESSAGE_TYPE, (_message, _options, theme) => {
 		const box = new Box(1, 1, (text) => theme.bg("customMessageBg", text));
@@ -372,6 +373,23 @@ export default function onboardingGuideExtension(pi: ExtensionAPI) {
 		}),
 
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+			if (params.step === "tree" && !sawTreeSummarizationEvent && !completedSteps.includes("tree")) {
+				const next = nextStep(completedSteps);
+				return {
+					content: [
+						{
+							type: "text",
+							text: [
+								`Cannot mark step done yet: ${STEPS.tree.label}.`,
+								`No /tree summarization event was detected. The user likely selected "No summary".`,
+								`Ask them to run /tree again, pick ${IMPLEMENTATION_CHECKPOINT_LABEL}, and choose Summarize.`,
+								next ? `Next incomplete step remains: ${STEPS[next].label}.` : "",
+							].filter(Boolean).join(" "),
+						},
+					],
+				};
+			}
+
 			const current = new Set(completedSteps);
 			const alreadyDone = current.has(params.step);
 			current.add(params.step);
@@ -577,8 +595,21 @@ export default function onboardingGuideExtension(pi: ExtensionAPI) {
 	pi.on("session_tree", async (event, ctx) => {
 		refreshFromSession(ctx);
 		if (completedSteps.includes("tree")) return;
-		if (!event.summaryEntry) return;
 
+		if (!event.summaryEntry) {
+			queueHiddenEvent(
+				`[TUTORIAL EVENT]\nThe user used /tree but did not choose Summarize (likely selected "No summary"). The tutorial step "Rewind with /tree" is not complete yet. Coach them to run /tree again, pick ${IMPLEMENTATION_CHECKPOINT_LABEL}, and choose Summarize.`,
+			);
+			if (ctx.hasUI) {
+				ctx.ui.notify(
+					`Tutorial tip: /tree step is only complete after choosing Summarize (not "No summary").`,
+					"warning",
+				);
+			}
+			return;
+		}
+
+		sawTreeSummarizationEvent = true;
 		const targetId = event.summaryEntry.parentId ?? event.newLeafId;
 		const targetLabel = targetId ? ctx.sessionManager.getLabel(targetId) : undefined;
 		const summaryLabel = ctx.sessionManager.getLabel(event.summaryEntry.id);
