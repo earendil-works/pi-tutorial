@@ -3,7 +3,9 @@ import type { ExtensionAPI, ExtensionContext, Theme } from "@mariozechner/pi-cod
 import { Box, Text, truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
 
-const STEP_IDS = ["basics", "idea", "chat", "code", "tests", "share", "model", "extension"] as const;
+const RELOAD_PENDING_KEY = Symbol.for("pi-tutorial.onboarding.reload-pending");
+
+const STEP_IDS = ["basics", "idea", "chat", "code", "tests", "model", "extension"] as const;
 type StepId = (typeof STEP_IDS)[number];
 
 const HINT_IDS = [
@@ -105,16 +107,6 @@ const STEPS: Record<StepId, StepMeta> = {
 		promptExamples: [
 			"Run the tests and fix anything that fails.",
 			"Please verify this works by running the relevant test or check command.",
-		],
-	},
-	share: {
-		label: "Share session",
-		title: "Share the session (/share)",
-		hint: "The user has shared the session or is clearly ready to do so.",
-		prompt: "Quickly summarize what we built so I can share this session with someone.",
-		promptExamples: [
-			"Give me a short recap I can share, then remind me to run /share.",
-			"Summarize what we built so I can share this session.",
 		],
 	},
 	model: {
@@ -286,6 +278,7 @@ function buildStatusText(completedSteps: StepId[]): string {
 	return lines.join("\n");
 }
 
+
 export default function onboardingGuideExtension(pi: ExtensionAPI) {
 	let completedSteps: StepId[] = [];
 	let shownHints: HintId[] = [];
@@ -362,14 +355,14 @@ export default function onboardingGuideExtension(pi: ExtensionAPI) {
 		);
 	};
 
-	const queueHiddenEvent = (content: string) => {
+	const queueHiddenEvent = (content: string, triggerTurn = false) => {
 		pi.sendMessage(
 			{
 				customType: EVENT_MESSAGE_TYPE,
 				content,
 				display: false,
 			},
-			{ deliverAs: "nextTurn" },
+			triggerTurn ? { triggerTurn: true } : { deliverAs: "nextTurn" },
 		);
 	};
 
@@ -559,27 +552,48 @@ export default function onboardingGuideExtension(pi: ExtensionAPI) {
 		},
 	});
 
+	pi.registerCommand("onboard-debug", {
+		description: "Simulate onboarding events like reload/model",
+		handler: async (args, ctx) => {
+			const command = (args ?? "").trim();
+			if (command === "reload") {
+				queueHiddenEvent(
+					`[TUTORIAL EVENT]\nThe user successfully ran /reload. If the tutorial step "Build extension" is otherwise satisfied and not already complete, you may mark it done with ${STEP_TOOL_NAME}.`,
+					true,
+				);
+				ctx.ui.notify("Queued simulated /reload event.", "info");
+				return;
+			}
+			if (command === "model") {
+				queueHiddenEvent(
+					`[TUTORIAL EVENT]\nThe user switched to a different model. If the tutorial step "Switch model" is not already complete, mark it done with ${STEP_TOOL_NAME}.`,
+					true,
+				);
+				ctx.ui.notify("Queued simulated model-switch event.", "info");
+				return;
+			}
+
+			ctx.ui.notify("Usage: /onboard-debug [reload|model]", "info");
+		},
+	});
+
 	pi.on("session_start", async (_event, ctx) => {
 		refreshFromSession(ctx);
+		const globalObj = globalThis as Record<PropertyKey, unknown>;
+		const pendingReloadAt = globalObj[RELOAD_PENDING_KEY];
+		if (typeof pendingReloadAt === "number" && Date.now() - pendingReloadAt < 15000) {
+			delete globalObj[RELOAD_PENDING_KEY];
+			if (!completedSteps.includes("extension")) {
+				queueHiddenEvent(
+					`[TUTORIAL EVENT]\nThe extension runtime just reloaded successfully. If the tutorial step "Build extension" is otherwise satisfied and not already complete, you may mark it done with ${STEP_TOOL_NAME}.`,
+					true,
+				);
+			}
+		}
 		maybeSendKickoff(ctx);
 		if (ctx.hasUI) {
 			ctx.ui.notify("Pi tutorial guide is active.", "info");
 		}
-	});
-
-	pi.on("input", async (event) => {
-		const text = event.text.trim();
-		if (/^\/share\b/i.test(text)) {
-			queueHiddenEvent(
-				`[TUTORIAL EVENT]\nThe user ran /share and got a share URL. If the tutorial step "Share session" is not already complete, mark it done with ${STEP_TOOL_NAME}.`,
-			);
-		}
-		if (/^\/reload\b/i.test(text)) {
-			queueHiddenEvent(
-				`[TUTORIAL EVENT]\nThe user ran /reload. If the tutorial step "Build extension" is otherwise satisfied and not already complete, you may mark it done with ${STEP_TOOL_NAME}.`,
-			);
-		}
-		return { action: "continue" as const };
 	});
 
 	pi.on("session_switch", async (_event, ctx) => {
@@ -597,10 +611,14 @@ export default function onboardingGuideExtension(pi: ExtensionAPI) {
 
 	pi.on("model_select", async (event, ctx) => {
 		renderFooter(ctx);
-		if (event.source !== "restore") {
+		if (event.source !== "restore" && !completedSteps.includes("model")) {
 			queueHiddenEvent(
 				`[TUTORIAL EVENT]\nThe user switched to a different model. If the tutorial step "Switch model" is not already complete, mark it done with ${STEP_TOOL_NAME}.`,
 			);
 		}
+	});
+
+	pi.on("session_shutdown", async () => {
+		(globalThis as Record<PropertyKey, unknown>)[RELOAD_PENDING_KEY] = Date.now();
 	});
 }
