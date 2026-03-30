@@ -5,12 +5,11 @@ import { Type } from "@sinclair/typebox";
 
 const RELOAD_PENDING_KEY = Symbol.for("pi-tutorial.onboarding.reload-pending");
 
-const STEP_IDS = ["basics", "idea", "chat", "code", "tests", "model", "extension"] as const;
+const STEP_IDS = ["basics", "idea", "chat", "code", "tests", "tree", "extension"] as const;
 type StepId = (typeof STEP_IDS)[number];
 
 const HINT_IDS = [
 	"answer_numbered_questions",
-	//"back_and_forth_clarify",
 	"ask_to_run_commands",
 	"one_vertical_slice",
 ] as const;
@@ -53,6 +52,7 @@ const STEP_TOOL_NAME = "mark_step_done";
 const HINT_TOOL_NAME = "show_hint";
 const KICKOFF_MESSAGE_TYPE = "onboarding-guide-kickoff";
 const EVENT_MESSAGE_TYPE = "onboarding-guide-event";
+const IMPLEMENTATION_CHECKPOINT_LABEL = "before-implementation";
 const ONBOARDING_STARTING_MESSAGE = "Hang on for a bit, I'm preparing a custom tour for you.";
 
 const STEPS: Record<StepId, StepMeta> = {
@@ -109,15 +109,15 @@ const STEPS: Record<StepId, StepMeta> = {
 			"Please verify this works by running the relevant test or check command.",
 		],
 	},
-	model: {
-		label: "Switch model",
-		title: "Switch models and compare output style",
-		hint: "A different model was used and its style or output was compared.",
+	tree: {
+		label: "Rewind with /tree",
+		title: "Use /tree to rewind and summarize a branch",
+		hint: `The user used /tree to jump back to the ${IMPLEMENTATION_CHECKPOINT_LABEL} checkpoint and chose summarization.`,
 		prompt:
-			"Let's switch to a different model now. After switching, give me a concise recap and one improvement suggestion.",
+			`Let's use /tree to jump back to the ${IMPLEMENTATION_CHECKPOINT_LABEL} checkpoint, choose Summarize, and then continue from there with a cleaner context.`,
 		promptExamples: [
-			"Let's switch models and compare the response style.",
-			"After I switch models, give me a concise recap and one improvement suggestion.",
+			`Let's use /tree to jump back to the ${IMPLEMENTATION_CHECKPOINT_LABEL} checkpoint, choose Summarize, and then continue from there.`,
+			`Please use /tree, select ${IMPLEMENTATION_CHECKPOINT_LABEL}, choose Summarize, and then let's build the extension from that cleaner branch.`,
 		],
 	},
 	extension: {
@@ -139,11 +139,6 @@ const HINTS: Record<HintId, HintMeta> = {
 		whenToUse: "When you asked the user multiple numbered questions and they might want a compact way to answer.",
 		body: "By the way, if you want to answer multiple questions at once, you can reply like this:\n1: ...\n2: ...\n3: ...",
 	},
-	//back_and_forth_clarify: {
-	//	title: "Ask Pi for a back-and-forth clarification pass",
-	//	whenToUse: "When the user is moving into planning or the problem is still underspecified.",
-	//	body: 'A very effective prompt here is: "Please do a back and forth with me to clarify." That tells me to slow down, ask questions, and refine the plan with you before coding.',
-	//},
 	ask_to_run_commands: {
 		title: "Tell Pi explicitly when to run something",
 		whenToUse: "When execution is optional and the user may not realize they can ask Pi to actually run a check or demo.",
@@ -180,7 +175,7 @@ function nextStep(completedSteps: StepId[]): StepId | undefined {
 
 function reconstructCompletedSteps(ctx: ExtensionContext): StepId[] {
 	const done = new Set<StepId>();
-	for (const entry of ctx.sessionManager.getBranch() as Array<{
+	for (const entry of ctx.sessionManager.getEntries() as Array<{
 		type?: string;
 		message?: { role?: string; toolName?: string; details?: { step?: unknown } };
 	}>) {
@@ -194,7 +189,7 @@ function reconstructCompletedSteps(ctx: ExtensionContext): StepId[] {
 
 function reconstructShownHints(ctx: ExtensionContext): HintId[] {
 	const shown = new Set<HintId>();
-	for (const entry of ctx.sessionManager.getBranch() as Array<{
+	for (const entry of ctx.sessionManager.getEntries() as Array<{
 		type?: string;
 		message?: { role?: string; toolName?: string; details?: { hint?: unknown; alreadyShown?: unknown } };
 	}>) {
@@ -282,6 +277,7 @@ function buildStatusText(completedSteps: StepId[]): string {
 export default function onboardingGuideExtension(pi: ExtensionAPI) {
 	let completedSteps: StepId[] = [];
 	let shownHints: HintId[] = [];
+	let pendingTutorialEvents: string[] = [];
 	let kickoffSent = false;
 
 	pi.registerMessageRenderer(KICKOFF_MESSAGE_TYPE, (_message, _options, theme) => {
@@ -355,15 +351,10 @@ export default function onboardingGuideExtension(pi: ExtensionAPI) {
 		);
 	};
 
-	const queueHiddenEvent = (content: string, triggerTurn = false) => {
-		pi.sendMessage(
-			{
-				customType: EVENT_MESSAGE_TYPE,
-				content,
-				display: false,
-			},
-			triggerTurn ? { triggerTurn: true } : { deliverAs: "nextTurn" },
-		);
+	const queueHiddenEvent = (content: string) => {
+		if (!pendingTutorialEvents.includes(content)) {
+			pendingTutorialEvents.push(content);
+		}
 	};
 
 	pi.registerTool({
@@ -385,6 +376,10 @@ export default function onboardingGuideExtension(pi: ExtensionAPI) {
 			const alreadyDone = current.has(params.step);
 			current.add(params.step);
 			completedSteps = orderedUniqueSteps(current);
+			if (!alreadyDone && params.step === "chat") {
+				const leafId = ctx.sessionManager.getLeafId();
+				if (leafId) pi.setLabel(leafId, IMPLEMENTATION_CHECKPOINT_LABEL);
+			}
 			renderFooter(ctx);
 
 			const remainingSteps = STEP_IDS.filter((step) => !current.has(step));
@@ -553,27 +548,25 @@ export default function onboardingGuideExtension(pi: ExtensionAPI) {
 	});
 
 	pi.registerCommand("onboard-debug", {
-		description: "Simulate onboarding events like reload/model",
+		description: "Simulate onboarding events like reload/tree",
 		handler: async (args, ctx) => {
 			const command = (args ?? "").trim();
 			if (command === "reload") {
 				queueHiddenEvent(
-					`[TUTORIAL EVENT]\nThe user successfully ran /reload. If the tutorial step "Build extension" is otherwise satisfied and not already complete, you may mark it done with ${STEP_TOOL_NAME}.`,
-					true,
+					`[TUTORIAL EVENT]\nThe extension runtime just reloaded successfully. If the tutorial step "Build extension" is otherwise satisfied and not already complete, you may mark it done with ${STEP_TOOL_NAME}.`,
 				);
-				ctx.ui.notify("Queued simulated /reload event.", "info");
+				ctx.ui.notify("Queued simulated /reload event for the next turn.", "info");
 				return;
 			}
-			if (command === "model") {
+			if (command === "tree") {
 				queueHiddenEvent(
-					`[TUTORIAL EVENT]\nThe user switched to a different model. If the tutorial step "Switch model" is not already complete, mark it done with ${STEP_TOOL_NAME}.`,
-					true,
+					`[TUTORIAL EVENT]\nThe user used /tree and chose summarization. If the tutorial step "Rewind with /tree" is not already complete, mark it done with ${STEP_TOOL_NAME}.`,
 				);
-				ctx.ui.notify("Queued simulated model-switch event.", "info");
+				ctx.ui.notify("Queued simulated /tree event for the next turn.", "info");
 				return;
 			}
 
-			ctx.ui.notify("Usage: /onboard-debug [reload|model]", "info");
+			ctx.ui.notify("Usage: /onboard-debug [reload|tree]", "info");
 		},
 	});
 
@@ -586,7 +579,6 @@ export default function onboardingGuideExtension(pi: ExtensionAPI) {
 			if (!completedSteps.includes("extension")) {
 				queueHiddenEvent(
 					`[TUTORIAL EVENT]\nThe extension runtime just reloaded successfully. If the tutorial step "Build extension" is otherwise satisfied and not already complete, you may mark it done with ${STEP_TOOL_NAME}.`,
-					true,
 				);
 			}
 		}
@@ -605,17 +597,39 @@ export default function onboardingGuideExtension(pi: ExtensionAPI) {
 		refreshFromSession(ctx);
 	});
 
-	pi.on("session_tree", async (_event, ctx) => {
+	pi.on("session_tree", async (event, ctx) => {
 		refreshFromSession(ctx);
+		if (completedSteps.includes("tree")) return;
+		if (!event.summaryEntry) return;
+
+		const targetId = event.summaryEntry.parentId ?? event.newLeafId;
+		const targetLabel = targetId ? ctx.sessionManager.getLabel(targetId) : undefined;
+		const summaryLabel = ctx.sessionManager.getLabel(event.summaryEntry.id);
+		const usedCheckpoint =
+			targetLabel === IMPLEMENTATION_CHECKPOINT_LABEL || summaryLabel === IMPLEMENTATION_CHECKPOINT_LABEL;
+
+		queueHiddenEvent(
+			usedCheckpoint
+				? `[TUTORIAL EVENT]\nThe user used /tree, navigated back to the labeled checkpoint "${IMPLEMENTATION_CHECKPOINT_LABEL}", and chose summarization. If the tutorial step "Rewind with /tree" is not already complete, mark it done with ${STEP_TOOL_NAME}.`
+				: `[TUTORIAL EVENT]\nThe user used /tree and chose summarization. If the tutorial step "Rewind with /tree" is not already complete, mark it done with ${STEP_TOOL_NAME}.`,
+		);
 	});
 
-	pi.on("model_select", async (event, ctx) => {
+	pi.on("before_agent_start", async () => {
+		if (pendingTutorialEvents.length === 0) return;
+		const content = pendingTutorialEvents.join("\n\n");
+		pendingTutorialEvents = [];
+		return {
+			message: {
+				customType: EVENT_MESSAGE_TYPE,
+				content,
+				display: false,
+			},
+		};
+	});
+
+	pi.on("model_select", async (_event, ctx) => {
 		renderFooter(ctx);
-		if (event.source !== "restore" && !completedSteps.includes("model")) {
-			queueHiddenEvent(
-				`[TUTORIAL EVENT]\nThe user switched to a different model. If the tutorial step "Switch model" is not already complete, mark it done with ${STEP_TOOL_NAME}.`,
-			);
-		}
 	});
 
 	pi.on("session_shutdown", async () => {
