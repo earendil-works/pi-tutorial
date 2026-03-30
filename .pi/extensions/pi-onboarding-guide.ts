@@ -6,12 +6,26 @@ import { Type } from "@sinclair/typebox";
 const STEP_IDS = ["basics", "idea", "chat", "code", "tests", "share", "model", "extension"] as const;
 type StepId = (typeof STEP_IDS)[number];
 
+const HINT_IDS = [
+	"answer_numbered_questions",
+	//"back_and_forth_clarify",
+	"ask_to_run_commands",
+	"one_vertical_slice",
+] as const;
+type HintId = (typeof HINT_IDS)[number];
+
 interface StepMeta {
 	label: string;
 	title: string;
 	hint: string;
 	prompt: string;
 	promptExamples: string[];
+}
+
+interface HintMeta {
+	title: string;
+	whenToUse: string;
+	body: string;
 }
 
 interface MarkStepDoneDetails {
@@ -26,8 +40,17 @@ interface MarkStepDoneDetails {
 	nextPromptExamples: string[];
 }
 
-const TOOL_NAME = "mark_step_done";
+interface ShowHintDetails {
+	hint: HintId;
+	title: string;
+	body: string;
+	alreadyShown: boolean;
+}
+
+const STEP_TOOL_NAME = "mark_step_done";
+const HINT_TOOL_NAME = "show_hint";
 const KICKOFF_MESSAGE_TYPE = "onboarding-guide-kickoff";
+const EVENT_MESSAGE_TYPE = "onboarding-guide-event";
 const ONBOARDING_STARTING_MESSAGE = "Hang on for a bit, I'm preparing a custom tour for you.";
 
 const STEPS: Record<StepId, StepMeta> = {
@@ -71,7 +94,7 @@ const STEPS: Record<StepId, StepMeta> = {
 			"Implement the first complete vertical slice of the project now. Keep code clean and explain key decisions briefly.",
 		promptExamples: [
 			"Implement the first vertical slice now, but explain key decisions briefly.",
-			"Start coding the smallest playable version we agreed on.",
+			"Start coding the smallest usable version we agreed on.",
 		],
 	},
 	tests: {
@@ -118,13 +141,45 @@ const STEPS: Record<StepId, StepMeta> = {
 	},
 };
 
+const HINTS: Record<HintId, HintMeta> = {
+	answer_numbered_questions: {
+		title: "Answer multiple numbered questions at once",
+		whenToUse: "When you asked the user multiple numbered questions and they might want a compact way to answer.",
+		body: "By the way, if you want to answer multiple questions at once, you can reply like this:\n1: ...\n2: ...\n3: ...",
+	},
+	//back_and_forth_clarify: {
+	//	title: "Ask Pi for a back-and-forth clarification pass",
+	//	whenToUse: "When the user is moving into planning or the problem is still underspecified.",
+	//	body: 'A very effective prompt here is: "Please do a back and forth with me to clarify." That tells me to slow down, ask questions, and refine the plan with you before coding.',
+	//},
+	ask_to_run_commands: {
+		title: "Tell Pi explicitly when to run something",
+		whenToUse: "When execution is optional and the user may not realize they can ask Pi to actually run a check or demo.",
+		body: 'If you want me to actually execute something, be explicit. For example: "run it now", "run the tests", or "check it in the terminal".',
+	},
+	one_vertical_slice: {
+		title: "Ask for one small vertical slice at a time",
+		whenToUse: "When the project feels too broad and the user would benefit from a smaller, safer next step.",
+		body: 'A good way to keep things moving is to ask for one small vertical slice at a time, for example: "implement the smallest usable version first".',
+	},
+};
+
 function isStepId(value: unknown): value is StepId {
 	return typeof value === "string" && (STEP_IDS as readonly string[]).includes(value);
+}
+
+function isHintId(value: unknown): value is HintId {
+	return typeof value === "string" && (HINT_IDS as readonly string[]).includes(value);
 }
 
 function orderedUniqueSteps(steps: Iterable<StepId>): StepId[] {
 	const set = new Set<StepId>(steps);
 	return STEP_IDS.filter((step) => set.has(step));
+}
+
+function orderedUniqueHints(hints: Iterable<HintId>): HintId[] {
+	const set = new Set<HintId>(hints);
+	return HINT_IDS.filter((hint) => set.has(hint));
 }
 
 function nextStep(completedSteps: StepId[]): StepId | undefined {
@@ -139,10 +194,24 @@ function reconstructCompletedSteps(ctx: ExtensionContext): StepId[] {
 	}>) {
 		if (entry.type !== "message") continue;
 		const message = entry.message;
-		if (message?.role !== "toolResult" || message.toolName !== TOOL_NAME) continue;
+		if (message?.role !== "toolResult" || message.toolName !== STEP_TOOL_NAME) continue;
 		if (isStepId(message.details?.step)) done.add(message.details.step);
 	}
 	return orderedUniqueSteps(done);
+}
+
+function reconstructShownHints(ctx: ExtensionContext): HintId[] {
+	const shown = new Set<HintId>();
+	for (const entry of ctx.sessionManager.getBranch() as Array<{
+		type?: string;
+		message?: { role?: string; toolName?: string; details?: { hint?: unknown; alreadyShown?: unknown } };
+	}>) {
+		if (entry.type !== "message") continue;
+		const message = entry.message;
+		if (message?.role !== "toolResult" || message.toolName !== HINT_TOOL_NAME) continue;
+		if (isHintId(message.details?.hint)) shown.add(message.details.hint);
+	}
+	return orderedUniqueHints(shown);
 }
 
 function hasConversationMessages(ctx: ExtensionContext): boolean {
@@ -155,22 +224,32 @@ function formatStepList(): string {
 	return STEP_IDS.map((step, index) => `${index + 1}. ${STEPS[step].title}\n   Completion signal: ${STEPS[step].hint}`).join("\n");
 }
 
+function formatHintList(): string {
+	return HINT_IDS.map((hint) => `- ${hint}: ${HINTS[hint].whenToUse}`).join("\n");
+}
+
 function buildKickoffPrompt(): string {
 	return `[PI TUTORIAL]
 You are guiding the user through the interactive Pi tutorial.
 
-Track these tutorial steps and mark them complete with the ${TOOL_NAME} tool when the user genuinely achieves them:
+Track these tutorial steps and mark them complete with the ${STEP_TOOL_NAME} tool when the user genuinely achieves them:
 ${formatStepList()}
 
+Available one-time hints via ${HINT_TOOL_NAME}:
+${formatHintList()}
+
 Rules:
-- Use ${TOOL_NAME} exactly when a step is actually complete.
+- Use ${STEP_TOOL_NAME} exactly when a step is actually complete.
 - Do not mark a step just because it was mentioned or planned.
-- Never call ${TOOL_NAME} again for a step that was already completed earlier.
-- Keep track of completed steps from previous ${TOOL_NAME} tool results.
+- Never call ${STEP_TOOL_NAME} again for a step that was already completed earlier.
+- Keep track of completed steps from previous ${STEP_TOOL_NAME} tool results.
 - Do not mark "Start chatting" during your first response.
 - The kickoff/tutorial message itself does not count as the user starting to chat.
 - Only mark "Start chatting" after the user sends a genuine follow-up message after your initial welcome.
-- Call the tool at most once per step.
+- Use ${HINT_TOOL_NAME} only when a built-in hint would genuinely help the user prompt Pi better.
+- Never show the same hint twice. Track which hints were already shown from previous ${HINT_TOOL_NAME} tool results.
+- Do not dump raw example prompts from tool results back to the user verbatim unless they fit naturally.
+- Instead, use the hidden tool guidance to colloquially coach the user in your own words.
 - Keep guidance short, practical, and aligned with the user's direct request.
 - If execution is optional, ask before running non-trivial commands or demos.
 
@@ -209,6 +288,7 @@ function buildStatusText(completedSteps: StepId[]): string {
 
 export default function onboardingGuideExtension(pi: ExtensionAPI) {
 	let completedSteps: StepId[] = [];
+	let shownHints: HintId[] = [];
 	let kickoffSent = false;
 
 	pi.registerMessageRenderer(KICKOFF_MESSAGE_TYPE, (_message, _options, theme) => {
@@ -262,6 +342,7 @@ export default function onboardingGuideExtension(pi: ExtensionAPI) {
 
 	const refreshFromSession = (ctx: ExtensionContext) => {
 		completedSteps = reconstructCompletedSteps(ctx);
+		shownHints = reconstructShownHints(ctx);
 		kickoffSent = (ctx.sessionManager.getBranch() as Array<{ type?: string; customType?: string }>).some(
 			(entry) => entry.type === "custom" && entry.customType === KICKOFF_MESSAGE_TYPE,
 		);
@@ -281,13 +362,24 @@ export default function onboardingGuideExtension(pi: ExtensionAPI) {
 		);
 	};
 
+	const queueHiddenEvent = (content: string) => {
+		pi.sendMessage(
+			{
+				customType: EVENT_MESSAGE_TYPE,
+				content,
+				display: false,
+			},
+			{ deliverAs: "nextTurn" },
+		);
+	};
+
 	pi.registerTool({
-		name: TOOL_NAME,
+		name: STEP_TOOL_NAME,
 		label: "Mark Step Done",
 		description: "Mark one tutorial step as completed.",
 		promptSnippet: "Mark a tutorial step as done when the user has genuinely completed it.",
 		promptGuidelines: [
-			`Use ${TOOL_NAME} when the user actually completes a tutorial step.`,
+			`Use ${STEP_TOOL_NAME} when the user actually completes a tutorial step.`,
 			"Do not mark steps early just because they were discussed.",
 		],
 		parameters: Type.Object({
@@ -324,7 +416,7 @@ export default function onboardingGuideExtension(pi: ExtensionAPI) {
 			const text = alreadyDone
 				? [
 					`Step already completed: ${STEPS[params.step].label}.`,
-					`Do not call ${TOOL_NAME} again for this step.`,
+					`Do not call ${STEP_TOOL_NAME} again for this step.`,
 					`Already completed steps: ${completedLabels}.`,
 					next ? `Next incomplete step: ${STEPS[next].label}.` : "All tutorial steps are complete.",
 					next
@@ -333,7 +425,7 @@ export default function onboardingGuideExtension(pi: ExtensionAPI) {
 				].filter(Boolean).join(" ")
 				: [
 					`Step completed: ${STEPS[params.step].label}.`,
-					`Do not call ${TOOL_NAME} again for this step.`,
+					`Do not call ${STEP_TOOL_NAME} again for this step.`,
 					`Already completed steps: ${completedLabels}.`,
 					next ? `Next incomplete step: ${STEPS[next].label}.` : "All tutorial steps are complete.",
 					next
@@ -380,6 +472,67 @@ export default function onboardingGuideExtension(pi: ExtensionAPI) {
 		},
 	});
 
+	pi.registerTool({
+		name: HINT_TOOL_NAME,
+		label: "Show Hint",
+		description: "Show a one-time tutorial hint that helps the user prompt Pi better.",
+		promptSnippet: "Show a built-in one-time hint when it would help the user understand how to work with Pi.",
+		promptGuidelines: [
+			`Use ${HINT_TOOL_NAME} sparingly for one-time coaching nudges.`,
+			"Never show the same hint twice.",
+		],
+		parameters: Type.Object({
+			hint: StringEnum(HINT_IDS, { description: "The built-in hint to show" }),
+		}),
+
+		async execute(_toolCallId, params) {
+			const current = new Set(shownHints);
+			const alreadyShown = current.has(params.hint);
+			current.add(params.hint);
+			shownHints = orderedUniqueHints(current);
+
+			const meta = HINTS[params.hint];
+			const shownList = shownHints.map((hint) => hint).join(", ");
+			const text = alreadyShown
+				? [
+					`Hint already shown: ${params.hint}.`,
+					`Do not call ${HINT_TOOL_NAME} again for this hint.`,
+					shownList ? `Hints already shown: ${shownList}.` : "",
+				].filter(Boolean).join(" ")
+				: [
+					`Hint shown: ${params.hint}.`,
+					`Do not call ${HINT_TOOL_NAME} again for this hint.`,
+					`In your next assistant message, briefly reinforce this hint naturally in your own words if useful, but do not repeat it mechanically.`,
+				].join(" ");
+
+			const details: ShowHintDetails = {
+				hint: params.hint,
+				title: meta.title,
+				body: meta.body,
+				alreadyShown,
+			};
+
+			return {
+				content: [{ type: "text", text }],
+				details,
+			};
+		},
+
+		renderCall(_args, _theme) {
+			return new Text("", 0, 0);
+		},
+
+		renderResult(result, _options, theme) {
+			const details = result.details as ShowHintDetails | undefined;
+			if (!details || details.alreadyShown) {
+				return new Text("", 0, 0);
+			}
+
+			const text = `${theme.fg("accent", "💡 ")}${theme.bold(details.title)}\n${theme.fg("muted", details.body)}`;
+			return new Text(text, 0, 0);
+		},
+	});
+
 	pi.registerCommand("onboard", {
 		description: "Show tutorial progress or insert a suggested next prompt",
 		handler: async (args, ctx) => {
@@ -414,6 +567,21 @@ export default function onboardingGuideExtension(pi: ExtensionAPI) {
 		}
 	});
 
+	pi.on("input", async (event) => {
+		const text = event.text.trim();
+		if (/^\/share\b/i.test(text)) {
+			queueHiddenEvent(
+				`[TUTORIAL EVENT]\nThe user ran /share and got a share URL. If the tutorial step "Share session" is not already complete, mark it done with ${STEP_TOOL_NAME}.`,
+			);
+		}
+		if (/^\/reload\b/i.test(text)) {
+			queueHiddenEvent(
+				`[TUTORIAL EVENT]\nThe user ran /reload. If the tutorial step "Build extension" is otherwise satisfied and not already complete, you may mark it done with ${STEP_TOOL_NAME}.`,
+			);
+		}
+		return { action: "continue" as const };
+	});
+
 	pi.on("session_switch", async (_event, ctx) => {
 		refreshFromSession(ctx);
 		maybeSendKickoff(ctx);
@@ -427,7 +595,12 @@ export default function onboardingGuideExtension(pi: ExtensionAPI) {
 		refreshFromSession(ctx);
 	});
 
-	pi.on("model_select", async (_event, ctx) => {
+	pi.on("model_select", async (event, ctx) => {
 		renderFooter(ctx);
+		if (event.source !== "restore") {
+			queueHiddenEvent(
+				`[TUTORIAL EVENT]\nThe user switched to a different model. If the tutorial step "Switch model" is not already complete, mark it done with ${STEP_TOOL_NAME}.`,
+			);
+		}
 	});
 }
