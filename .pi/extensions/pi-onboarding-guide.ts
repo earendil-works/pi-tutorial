@@ -2,6 +2,7 @@ import { StringEnum } from "@mariozechner/pi-ai";
 import type { ExtensionAPI, ExtensionContext, Theme } from "@mariozechner/pi-coding-agent";
 import { Box, Text, truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
+import { spawnSync } from "node:child_process";
 
 const RELOAD_PENDING_KEY = Symbol.for("pi-tutorial.onboarding.reload-pending");
 
@@ -67,13 +68,13 @@ const STEPS: Record<StepId, StepMeta> = {
 	},
 	profile: {
 		label: "Share background",
-		title: "Answer onboarding questions about background, tooling familiarity, and interests",
-		hint: "The user shared: (1) programming familiarity and preferred language (or that they are not a programmer), (2) familiarity with AI coding tools, and (3) what kinds of projects interest them.",
+		title: "Answer onboarding questions about language background and tooling familiarity",
+		hint: "The user shared: (1) programming familiarity and preferred language (or that they are not a programmer), and (2) familiarity with AI coding tools.",
 		prompt:
-			"Before project ideas, ask me a few short onboarding questions: my programming/language background (or non-programmer), my familiarity with AI coding tools, and what kinds of things interest me.",
+			"Before project ideas, ask me two short onboarding questions: my programming/language background (or non-programmer) and my familiarity with AI coding tools.",
 		promptExamples: [
-			"Ask me 3 short onboarding questions first (language background, AI coding tool familiarity, interests).",
-			"Before we pick a project, please quickly profile my background and interests so you can tailor ideas.",
+			"Ask me 2 short onboarding questions first (language background + AI coding tool familiarity).",
+			"Before we pick a project, quickly profile my language comfort and prior AI-coding-tool experience.",
 		],
 	},
 	piFoundations: {
@@ -81,9 +82,9 @@ const STEPS: Record<StepId, StepMeta> = {
 		title: "Learn what makes Pi different (minimal prompt, 4 built-in tools, extensibility)",
 		hint: "The user was explicitly taught that Pi uses a minimal system prompt, has only four built-in tools (read/edit/write/bash), and is extended through extensions and skills.",
 		prompt:
-			"Before project selection, give me a short Pi-specific orientation: minimal system prompt, only read/edit/write/bash built-ins, and how extensions/skills extend capabilities.",
+			"Before project selection, briefly explain what makes Pi different: minimal system prompt, only read/edit/write/bash built-ins, and how extensions/skills extend capabilities.",
 		promptExamples: [
-			"Give me a quick Pi orientation: prompt model, built-in tools, and extensions/skills.",
+			"Give me a quick explanation of what makes Pi different: prompt model, built-in tools, and extensions/skills.",
 			"Explain in 3-5 bullets what makes Pi different from other coding agents.",
 		],
 	},
@@ -92,21 +93,21 @@ const STEPS: Record<StepId, StepMeta> = {
 		title: "Understand Pi's no-sandbox, full-permissions model",
 		hint: "The user was told clearly that Pi runs without sandboxing and with full permissions by design, and this was acknowledged before continuing.",
 		prompt:
-			"Also explain Pi's permission model: no sandbox, full permissions by design, and what practical care I should take when asking it to run commands.",
+			"Briefly explain Pi's permission model: no sandbox, full permissions by design, and what practical care I should take when asking it to run commands.",
 		promptExamples: [
 			"Before we code, explain Pi's trust/permission model and how to use it responsibly.",
-			"Please give me the short version of Pi's no-sandbox model and safety expectations.",
+			"Give me the short version of Pi's no-sandbox model and safety expectations.",
 		],
 	},
 	idea: {
 		label: "Pick project",
 		title: "Pick a small project (target: ~200-300 LOC) tailored to the user",
-		hint: "A concrete small project has been chosen, ideally aligned with the user's background and interests.",
+		hint: "A concrete small project has been chosen, ideally aligned with the user's background and stated preferences.",
 		prompt:
-			"Now suggest 3 small projects I can build in ~200-300 lines, tailored to my background and interests. Include short scope + test strategy for each, then recommend one.",
+			"Now suggest 3 small projects I can build in ~200-300 lines, tailored to my background. Include short scope + test strategy for each, then recommend one.",
 		promptExamples: [
 			"Given what you learned about me, suggest 3 tiny tutorial projects and recommend one.",
-			"Propose 3 small project options tailored to my language comfort and interests.",
+			"Propose 3 small project options tailored to my language comfort.",
 		],
 	},
 	chat: {
@@ -239,6 +240,24 @@ function hasConversationMessages(ctx: ExtensionContext): boolean {
 	);
 }
 
+const PLAN_REQUEST_RE = /\b(plan|planning|implementation plan|design|back[- ]?and[- ]?forth|clarify)\b/i;
+
+function messageContentToText(content: unknown): string {
+	if (typeof content === "string") return content;
+	if (!Array.isArray(content)) return "";
+	return content
+		.map((part) => {
+			if (typeof part === "string") return part;
+			if (part && typeof part === "object" && "text" in part) {
+				const text = (part as { text?: unknown }).text;
+				if (typeof text === "string") return text;
+			}
+			return "";
+		})
+		.filter(Boolean)
+		.join(" ");
+}
+
 function formatStepList(): string {
 	return STEP_IDS.map((step, index) => `${index + 1}. ${STEPS[step].title}\n   Completion signal: ${STEPS[step].hint}`).join("\n");
 }
@@ -255,7 +274,26 @@ function formatTokens(count: number): string {
 	return `${Math.round(count / 1000000)}M`;
 }
 
-function buildKickoffPrompt(): string {
+function hasExecutable(command: string): boolean {
+	const result = spawnSync(command, ["--version"], {
+		stdio: "ignore",
+		timeout: 1000,
+	});
+	return !result.error && result.status === 0;
+}
+
+function detectInstalledLanguages(): string[] {
+	const installed: string[] = [];
+	if (hasExecutable("python3")) installed.push("Python");
+	if (hasExecutable("node")) installed.push("JavaScript/TypeScript (Node.js)");
+	if (hasExecutable("go")) installed.push("Go");
+	if (hasExecutable("rustc") || hasExecutable("cargo")) installed.push("Rust");
+	if (hasExecutable("ruby")) installed.push("Ruby");
+	return installed;
+}
+
+function buildKickoffPrompt(installedLanguages: string[]): string {
+	const runtimeList = installedLanguages.length > 0 ? installedLanguages.join(", ") : "none detected";
 	return `[PI TUTORIAL]
 You are guiding the user through the interactive Pi tutorial.
 
@@ -279,20 +317,27 @@ Rules:
 - Instead, use the hidden tool guidance to colloquially coach the user in your own words.
 - Keep guidance short, practical, and aligned with the user's direct request.
 - If execution is optional, ask before running non-trivial commands or demos.
-- Before project selection, gather onboarding context: programming/language familiarity (including a non-programmer option), familiarity with AI coding tools, and interest areas.
+- Before project selection, gather onboarding context: programming/language familiarity (including a non-programmer option) and familiarity with AI coding tools.
+- Detected runnable languages on this machine: ${runtimeList}.
+- When discussing language preferences, only suggest languages from that detected list (plus the non-programmer option).
 - If the user states a preferred programming language, carry that preference through project choice and implementation unless they ask to switch.
 - Teach Pi-specific concepts in separate mini-steps (not one long message):
   1) minimal system prompt + only four built-in tools (read/edit/write/bash) + extensions/skills,
   2) no sandboxing + full permissions by design.
 - Keep each onboarding response compact; avoid combining multiple tutorial steps into a single long reply.
+- Do not reveal internal tutorial framing in user-facing text (no "step", "orientation", "1/2", or "2/2"). Explain naturally and continue.
+- By default, after finishing a step, do not proactively perform the next step. Instead, coach the user how to ask for it and then wait.
+- Exception: when moving to "Pi basics" or "Pick project", ask one direct follow-up question to offer that next step now (do not ask the user to re-prompt Pi first).
+- Specifically: after "Pick project", do not start planning automatically. Wait for an explicit user planning request.
 
 In your first reply:
 - Welcome the user.
 - Explain that they can type in the bottom input and press Enter to chat.
 - Briefly mention that you can read/edit/write files and run commands.
-- Ask 3 short onboarding questions (numbered) covering: language/background, AI coding tool familiarity, and interests.
-- Tell them they can answer in numbered form (1/2/3).
-- Say you will tailor project ideas based on their answers after two short Pi-orientation steps.`;
+- Ask 2 short onboarding questions (numbered) covering: language/background and AI coding tool familiarity.
+- In the language question, if giving examples, use only the detected runnable languages: ${runtimeList}.
+- Tell them they can answer in numbered form (1/2).
+- Say you will tailor project ideas based on their answers after a couple of short setup explanations.`;
 }
 
 function getPiMascot(theme: Theme): string[] {
@@ -513,10 +558,11 @@ export default function onboardingGuideExtension(pi: ExtensionAPI) {
 	const maybeSendKickoff = (ctx: ExtensionContext) => {
 		if (kickoffSent || hasConversationMessages(ctx)) return;
 		kickoffSent = true;
+		const installedLanguages = detectInstalledLanguages();
 		pi.sendMessage(
 			{
 				customType: KICKOFF_MESSAGE_TYPE,
-				content: buildKickoffPrompt(),
+				content: buildKickoffPrompt(installedLanguages),
 				display: true,
 			},
 			{ triggerTurn: true },
@@ -544,6 +590,32 @@ export default function onboardingGuideExtension(pi: ExtensionAPI) {
 		}),
 
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+			if (params.step === "chat") {
+				const branch = ctx.sessionManager.getBranch() as Array<{
+					type?: string;
+					message?: { role?: string; content?: unknown };
+				}>;
+				const lastUser = [...branch].reverse().find(
+					(entry) => entry.type === "message" && entry.message?.role === "user",
+				);
+				const lastUserText = messageContentToText(lastUser?.message?.content).trim();
+				if (!PLAN_REQUEST_RE.test(lastUserText)) {
+					const next = nextStep(completedSteps);
+					return {
+						content: [
+							{
+								type: "text",
+								text: [
+									`Cannot mark step done yet: ${STEPS.chat.label}.`,
+									`The user did not explicitly ask to start planning in their latest message. Coach them with 1-2 example planning prompts and wait.`,
+									next ? `Next incomplete step remains: ${STEPS[next].label}.` : "",
+								].filter(Boolean).join(" "),
+							},
+						],
+					};
+				}
+			}
+
 			if (params.step === "piPermissions" && !completedSteps.includes("piFoundations")) {
 				const next = nextStep(completedSteps);
 				return {
@@ -620,24 +692,26 @@ export default function onboardingGuideExtension(pi: ExtensionAPI) {
 			const nextPromptText = nextPromptExamples.length > 0
 				? ` Suggested prompts: ${nextPromptExamples.slice(0, 2).map((example) => `"${example}"`).join(" or ")}.`
 				: "";
+			const shouldAskDirectly = next === "piFoundations" || next === "idea";
+			const nextStepCoaching = next
+				? shouldAskDirectly
+					? `In your next assistant message, ask one direct follow-up question offering ${STEPS[next].label} now. Do not ask the user to re-prompt Pi first.`
+					: `In your next assistant message, coach the user on how to ask for ${STEPS[next].label} with 1-2 concrete example prompts, then wait for their explicit request before proceeding.${nextPromptText}`
+				: "";
 			const text = alreadyDone
 				? [
 					`Step already completed: ${STEPS[params.step].label}.`,
 					`Do not call ${STEP_TOOL_NAME} again for this step.`,
 					`Already completed steps: ${completedLabels}.`,
 					next ? `Next incomplete step: ${STEPS[next].label}.` : "All tutorial steps are complete.",
-					next
-						? `In your next assistant message, coach the user on how to ask for ${STEPS[next].label} with 1-2 concrete example prompts before taking over.${nextPromptText}`
-						: "",
+					nextStepCoaching,
 				].filter(Boolean).join(" ")
 				: [
 					`Step completed: ${STEPS[params.step].label}.`,
 					`Do not call ${STEP_TOOL_NAME} again for this step.`,
 					`Already completed steps: ${completedLabels}.`,
 					next ? `Next incomplete step: ${STEPS[next].label}.` : "All tutorial steps are complete.",
-					next
-						? `In your next assistant message, coach the user on how to ask for ${STEPS[next].label} with 1-2 concrete example prompts before taking over.${nextPromptText}`
-						: "",
+					nextStepCoaching,
 				].filter(Boolean).join(" ");
 
 			return {
