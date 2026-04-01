@@ -5,7 +5,7 @@ import { Type } from "@sinclair/typebox";
 
 const RELOAD_PENDING_KEY = Symbol.for("pi-tutorial.onboarding.reload-pending");
 
-const STEP_IDS = ["basics", "idea", "chat", "code", "tests", "tree", "extension"] as const;
+const STEP_IDS = ["basics", "profile", "idea", "chat", "code", "tests", "extension", "iterate"] as const;
 type StepId = (typeof STEP_IDS)[number];
 
 const HINT_IDS = [
@@ -52,7 +52,6 @@ const STEP_TOOL_NAME = "mark_step_done";
 const HINT_TOOL_NAME = "show_hint";
 const KICKOFF_MESSAGE_TYPE = "onboarding-guide-kickoff";
 const EVENT_MESSAGE_TYPE = "onboarding-guide-event";
-const IMPLEMENTATION_CHECKPOINT_LABEL = "before-implementation";
 const ONBOARDING_STARTING_MESSAGE = "Hang on for a bit, I'm preparing a custom tour for you.";
 
 const STEPS: Record<StepId, StepMeta> = {
@@ -66,15 +65,26 @@ const STEPS: Record<StepId, StepMeta> = {
 			"Can you show me the basic way to ask you to help with this project?",
 		],
 	},
+	profile: {
+		label: "Share background",
+		title: "Answer onboarding questions about background, tooling familiarity, and interests",
+		hint: "The user shared: (1) programming familiarity and preferred language (or that they are not a programmer), (2) familiarity with AI coding tools, and (3) what kinds of projects interest them.",
+		prompt:
+			"Before project ideas, ask me a few short onboarding questions: my programming/language background (or non-programmer), my familiarity with AI coding tools, and what kinds of things interest me.",
+		promptExamples: [
+			"Ask me 3 short onboarding questions first (language background, AI coding tool familiarity, interests).",
+			"Before we pick a project, please quickly profile my background and interests so you can tailor ideas.",
+		],
+	},
 	idea: {
 		label: "Pick project",
-		title: "Pick a small project (target: ~200-300 LOC)",
-		hint: "A concrete small project has been chosen.",
+		title: "Pick a small project (target: ~200-300 LOC) tailored to the user",
+		hint: "A concrete small project has been chosen, ideally aligned with the user's background and interests.",
 		prompt:
-			"Help me pick a small project I can build in ~200-300 lines. Give me 3 options, each with a short scope and test strategy.",
+			"Now suggest 3 small projects I can build in ~200-300 lines, tailored to my background and interests. Include short scope + test strategy for each, then recommend one.",
 		promptExamples: [
-			"Help me pick a small project I can build in ~200-300 lines. Give me 3 options, each with a short scope and test strategy.",
-			"Ask me a couple of questions and then suggest 3 tiny tutorial projects.",
+			"Given what you learned about me, suggest 3 tiny tutorial projects and recommend one.",
+			"Propose 3 small project options tailored to my language comfort and interests.",
 		],
 	},
 	chat: {
@@ -109,26 +119,26 @@ const STEPS: Record<StepId, StepMeta> = {
 			"Please verify this works by running the relevant test or check command.",
 		],
 	},
-	tree: {
-		label: "Rewind with /tree",
-		title: "Use /tree to rewind and summarize a branch",
-		hint: `The user used /tree to jump back to the ${IMPLEMENTATION_CHECKPOINT_LABEL} checkpoint and chose Summarize (not "No summary").`,
-		prompt:
-			`Let's use /tree to jump back to the ${IMPLEMENTATION_CHECKPOINT_LABEL} checkpoint, choose Summarize (not "No summary"), and then continue from there with a cleaner context.`,
-		promptExamples: [
-			`Let's use /tree to jump back to the ${IMPLEMENTATION_CHECKPOINT_LABEL} checkpoint, choose Summarize (not "No summary"), and then continue from there.`,
-			`Please use /tree, select ${IMPLEMENTATION_CHECKPOINT_LABEL}, choose Summarize, and then let's build the extension from that cleaner branch.`,
-		],
-	},
 	extension: {
 		label: "Build extension",
-		title: "Create your own extension and reload (/reload)",
-		hint: "A small extension was created or updated and reloaded in Pi.",
+		title: "Create your own extension and reload it (/reload)",
+		hint: "A small extension command/tool was created or updated in .pi/extensions and Pi reloaded successfully.",
 		prompt:
-			"Create a tiny custom Pi extension in .pi/extensions/ that adds one useful command for this project.",
+			"Create a tiny custom Pi extension in .pi/extensions/ that adds one useful command for this project, then tell me to run /reload.",
 		promptExamples: [
-			"Help me create a tiny Pi extension for this project.",
-			"Scaffold a minimal extension in .pi/extensions/ that adds one useful command.",
+			"Help me create a tiny Pi extension for this project, then remind me to run /reload.",
+			"Scaffold a minimal extension in .pi/extensions/ that adds one useful command and walk me through reloading it.",
+		],
+	},
+	iterate: {
+		label: "Debug + iterate",
+		title: "Exercise the extension, debug behavior, and ship one improvement",
+		hint: "The extension was exercised in Pi, behavior was inspected, and at least one improvement was implemented and verified (typically via /reload).",
+		prompt:
+			"Now let's debug and iterate on the extension: run it, inspect output/logs, make one concrete improvement, reload, and verify the updated behavior.",
+		promptExamples: [
+			"Let's test the extension command now, debug anything odd, then improve it and reload.",
+			"Please drive one debug loop: run extension → inspect output → patch code → /reload → verify.",
 		],
 	},
 };
@@ -215,6 +225,14 @@ function formatHintList(): string {
 	return HINT_IDS.map((hint) => `- ${hint}: ${HINTS[hint].whenToUse}`).join("\n");
 }
 
+function formatTokens(count: number): string {
+	if (count < 1000) return count.toString();
+	if (count < 10000) return `${(count / 1000).toFixed(1)}k`;
+	if (count < 1000000) return `${Math.round(count / 1000)}k`;
+	if (count < 10000000) return `${(count / 1000000).toFixed(1)}M`;
+	return `${Math.round(count / 1000000)}M`;
+}
+
 function buildKickoffPrompt(): string {
 	return `[PI TUTORIAL]
 You are guiding the user through the interactive Pi tutorial.
@@ -239,13 +257,16 @@ Rules:
 - Instead, use the hidden tool guidance to colloquially coach the user in your own words.
 - Keep guidance short, practical, and aligned with the user's direct request.
 - If execution is optional, ask before running non-trivial commands or demos.
+- Before project selection, gather onboarding context: programming/language familiarity (including a non-programmer option), familiarity with AI coding tools, and interest areas.
+- If the user states a preferred programming language, carry that preference through project choice and implementation unless they ask to switch.
 
 In your first reply:
 - Welcome the user.
 - Explain that they can type in the bottom input and press Enter to chat.
 - Briefly mention that you can read/edit/write files and run commands.
-- Offer 3 starter project ideas (or invite them to propose their own).
-- Ask exactly one concrete follow-up question.`;
+- Ask 3 short onboarding questions (numbered) covering: language/background, AI coding tool familiarity, and interests.
+- Tell them they can answer in numbered form (1/2/3).
+- Say you will tailor project ideas based on their answers.`;
 }
 
 function getPiMascot(theme: Theme): string[] {
@@ -279,7 +300,6 @@ export default function onboardingGuideExtension(pi: ExtensionAPI) {
 	let shownHints: HintId[] = [];
 	let pendingTutorialEvents: string[] = [];
 	let kickoffSent = false;
-	let sawTreeSummarizationEvent = false;
 
 	pi.registerMessageRenderer(KICKOFF_MESSAGE_TYPE, (_message, _options, theme) => {
 		const box = new Box(1, 1, (text) => theme.bg("customMessageBg", text));
@@ -309,22 +329,147 @@ export default function onboardingGuideExtension(pi: ExtensionAPI) {
 				render(width: number): string[] {
 					const doneCount = completedSteps.length;
 					const next = nextStep(completedSteps);
-					const left = theme.fg("accent", theme.bold(`Tutor ${doneCount}/${STEP_IDS.length}`));
-					const middle = next
+					const tutor = theme.fg("accent", theme.bold(`Tutor ${doneCount}/${STEP_IDS.length}`));
+					const nextText = next
 						? theme.fg("warning", `Next: ${STEPS[next].label}`)
 						: theme.fg("success", "All tutorial steps complete");
+					const leftTop = `${tutor}${theme.fg("dim", " • ")}${nextText}`;
 
-					const branch = footerData.getGitBranch();
-					const rightParts = [ctx.model?.id];
-					if (branch) rightParts.push(`(${branch})`);
-					const right = rightParts.filter(Boolean).length > 0 ? theme.fg("dim", rightParts.filter(Boolean).join(" ")) : "";
-
-					let line = `${left}${theme.fg("dim", " • ")}${middle}`;
-					if (right) {
-						const pad = " ".repeat(Math.max(1, width - visibleWidth(line) - visibleWidth(right)));
-						line += pad + right;
+					let pwd = process.cwd();
+					const home = process.env.HOME || process.env.USERPROFILE;
+					if (home && pwd.startsWith(home)) {
+						pwd = `~${pwd.slice(home.length)}`;
 					}
-					return [truncateToWidth(line, width)];
+					const branch = footerData.getGitBranch();
+					if (branch) {
+						pwd = `${pwd} (${branch})`;
+					}
+					const sessionName = ctx.sessionManager.getSessionName();
+					if (sessionName) {
+						pwd = `${pwd} • ${sessionName}`;
+					}
+					const rightTop = theme.fg("dim", pwd);
+
+					const leftTopWidth = visibleWidth(leftTop);
+					const rightTopWidth = visibleWidth(rightTop);
+					const gap = 1;
+					let topLine: string;
+					if (leftTopWidth + gap + rightTopWidth <= width) {
+						topLine = `${leftTop}${" ".repeat(width - leftTopWidth - rightTopWidth)}${rightTop}`;
+					} else {
+						const leftBudget = Math.max(0, width - rightTopWidth - gap);
+						if (leftBudget >= 12) {
+							const leftTruncated = truncateToWidth(leftTop, leftBudget, theme.fg("dim", "..."));
+							topLine = `${leftTruncated}${" ".repeat(Math.max(gap, width - visibleWidth(leftTruncated) - rightTopWidth))}${rightTop}`;
+						} else {
+							const leftBudgetSplit = Math.max(0, Math.floor(width * 0.45));
+							const rightBudgetSplit = Math.max(0, width - leftBudgetSplit - gap);
+							const leftTruncated = truncateToWidth(leftTop, leftBudgetSplit, theme.fg("dim", "..."));
+							const rightTruncated = truncateToWidth(rightTop, rightBudgetSplit, theme.fg("dim", "..."));
+							topLine = `${leftTruncated}${" ".repeat(Math.max(gap, width - visibleWidth(leftTruncated) - visibleWidth(rightTruncated)))}${rightTruncated}`;
+						}
+					}
+					topLine = truncateToWidth(topLine, width, theme.fg("dim", "..."));
+
+					let totalInput = 0;
+					let totalOutput = 0;
+					let totalCacheRead = 0;
+					let totalCacheWrite = 0;
+					let totalCost = 0;
+					for (const entry of ctx.sessionManager.getEntries() as Array<{
+						type?: string;
+						message?: {
+							role?: string;
+							usage?: {
+								input?: number;
+								output?: number;
+								cacheRead?: number;
+								cacheWrite?: number;
+								cost?: { total?: number };
+							};
+						};
+					}>) {
+						if (entry.type !== "message" || entry.message?.role !== "assistant") continue;
+						totalInput += entry.message.usage?.input ?? 0;
+						totalOutput += entry.message.usage?.output ?? 0;
+						totalCacheRead += entry.message.usage?.cacheRead ?? 0;
+						totalCacheWrite += entry.message.usage?.cacheWrite ?? 0;
+						totalCost += entry.message.usage?.cost?.total ?? 0;
+					}
+
+					const contextUsage = ctx.getContextUsage();
+					const contextWindow = contextUsage?.contextWindow ?? ctx.model?.contextWindow ?? 0;
+					const contextPercentValue = contextUsage?.percent ?? 0;
+					const contextPercent = contextUsage?.percent !== null ? contextPercentValue.toFixed(1) : "?";
+					const autoIndicator = " (auto)";
+					const contextPercentDisplay =
+						contextPercent === "?"
+							? `?/${formatTokens(contextWindow)}${autoIndicator}`
+							: `${contextPercent}%/${formatTokens(contextWindow)}${autoIndicator}`;
+
+					let contextPercentStr: string;
+					if (contextPercentValue > 90) {
+						contextPercentStr = theme.fg("error", contextPercentDisplay);
+					} else if (contextPercentValue > 70) {
+						contextPercentStr = theme.fg("warning", contextPercentDisplay);
+					} else {
+						contextPercentStr = contextPercentDisplay;
+					}
+
+					const statsParts: string[] = [];
+					if (totalInput) statsParts.push(`↑${formatTokens(totalInput)}`);
+					if (totalOutput) statsParts.push(`↓${formatTokens(totalOutput)}`);
+					if (totalCacheRead) statsParts.push(`R${formatTokens(totalCacheRead)}`);
+					if (totalCacheWrite) statsParts.push(`W${formatTokens(totalCacheWrite)}`);
+					const usingSubscription = ctx.model ? ctx.modelRegistry.isUsingOAuth(ctx.model) : false;
+					if (totalCost || usingSubscription) {
+						statsParts.push(`$${totalCost.toFixed(3)}${usingSubscription ? " (sub)" : ""}`);
+					}
+					statsParts.push(contextPercentStr);
+
+					let statsLeft = statsParts.join(" ");
+					let statsLeftWidth = visibleWidth(statsLeft);
+					if (statsLeftWidth > width) {
+						statsLeft = truncateToWidth(statsLeft, width, "...");
+						statsLeftWidth = visibleWidth(statsLeft);
+					}
+
+					const modelName = ctx.model?.id || "no-model";
+					const thinkingLevel =
+						ctx.model?.reasoning && typeof pi.getThinkingLevel === "function" ? pi.getThinkingLevel() : "off";
+					const rightWithoutProvider =
+						ctx.model?.reasoning && thinkingLevel !== "off"
+							? `${modelName} • ${thinkingLevel}`
+							: ctx.model?.reasoning
+							? `${modelName} • thinking off`
+							: modelName;
+					let rightSide = rightWithoutProvider;
+					if (footerData.getAvailableProviderCount() > 1 && ctx.model) {
+						rightSide = `(${ctx.model.provider}) ${rightWithoutProvider}`;
+						if (statsLeftWidth + 2 + visibleWidth(rightSide) > width) {
+							rightSide = rightWithoutProvider;
+						}
+					}
+
+					const rightSideWidth = visibleWidth(rightSide);
+					let statsLine: string;
+					if (statsLeftWidth + 2 + rightSideWidth <= width) {
+						statsLine = `${statsLeft}${" ".repeat(width - statsLeftWidth - rightSideWidth)}${rightSide}`;
+					} else {
+						const availableForRight = width - statsLeftWidth - 2;
+						if (availableForRight > 0) {
+							const truncatedRight = truncateToWidth(rightSide, availableForRight, "");
+							statsLine = `${statsLeft}${" ".repeat(Math.max(0, width - statsLeftWidth - visibleWidth(truncatedRight)))}${truncatedRight}`;
+						} else {
+							statsLine = statsLeft;
+						}
+					}
+
+					const dimStatsLeft = theme.fg("dim", statsLeft);
+					const remainder = statsLine.slice(statsLeft.length);
+					const dimRemainder = theme.fg("dim", remainder);
+
+					return [topLine, dimStatsLeft + dimRemainder];
 				},
 			};
 		});
@@ -373,16 +518,15 @@ export default function onboardingGuideExtension(pi: ExtensionAPI) {
 		}),
 
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-			if (params.step === "tree" && !sawTreeSummarizationEvent && !completedSteps.includes("tree")) {
+			if (params.step === "iterate" && !completedSteps.includes("extension")) {
 				const next = nextStep(completedSteps);
 				return {
 					content: [
 						{
 							type: "text",
 							text: [
-								`Cannot mark step done yet: ${STEPS.tree.label}.`,
-								`No /tree summarization event was detected. The user likely selected "No summary".`,
-								`Ask them to run /tree again, pick ${IMPLEMENTATION_CHECKPOINT_LABEL}, and choose Summarize.`,
+								`Cannot mark step done yet: ${STEPS.iterate.label}.`,
+								`Finish ${STEPS.extension.label} first (including /reload), then run a debug/iteration loop.`,
 								next ? `Next incomplete step remains: ${STEPS[next].label}.` : "",
 							].filter(Boolean).join(" "),
 						},
@@ -394,10 +538,6 @@ export default function onboardingGuideExtension(pi: ExtensionAPI) {
 			const alreadyDone = current.has(params.step);
 			current.add(params.step);
 			completedSteps = orderedUniqueSteps(current);
-			if (!alreadyDone && params.step === "chat") {
-				const leafId = ctx.sessionManager.getLeafId();
-				if (leafId) pi.setLabel(leafId, IMPLEMENTATION_CHECKPOINT_LABEL);
-			}
 			renderFooter(ctx);
 
 			const remainingSteps = STEP_IDS.filter((step) => !current.has(step));
@@ -575,6 +715,10 @@ export default function onboardingGuideExtension(pi: ExtensionAPI) {
 				queueHiddenEvent(
 					`[TUTORIAL EVENT]\nThe extension runtime just reloaded successfully. If the tutorial step "Build extension" is otherwise satisfied and not already complete, you may mark it done with ${STEP_TOOL_NAME}.`,
 				);
+			} else if (!completedSteps.includes("iterate")) {
+				queueHiddenEvent(
+					`[TUTORIAL EVENT]\nThe extension runtime reloaded while "Build extension" is already complete. Coach the user to run the extension, inspect behavior, and do one concrete debug/iteration cycle. If they complete that loop, mark "Debug + iterate" with ${STEP_TOOL_NAME}.`,
+				);
 			}
 		}
 		maybeSendKickoff(ctx);
@@ -590,37 +734,6 @@ export default function onboardingGuideExtension(pi: ExtensionAPI) {
 
 	pi.on("session_fork", async (_event, ctx) => {
 		refreshFromSession(ctx);
-	});
-
-	pi.on("session_tree", async (event, ctx) => {
-		refreshFromSession(ctx);
-		if (completedSteps.includes("tree")) return;
-
-		if (!event.summaryEntry) {
-			queueHiddenEvent(
-				`[TUTORIAL EVENT]\nThe user used /tree but did not choose Summarize (likely selected "No summary"). The tutorial step "Rewind with /tree" is not complete yet. Coach them to run /tree again, pick ${IMPLEMENTATION_CHECKPOINT_LABEL}, and choose Summarize.`,
-			);
-			if (ctx.hasUI) {
-				ctx.ui.notify(
-					`Tutorial tip: /tree step is only complete after choosing Summarize (not "No summary").`,
-					"warning",
-				);
-			}
-			return;
-		}
-
-		sawTreeSummarizationEvent = true;
-		const targetId = event.summaryEntry.parentId ?? event.newLeafId;
-		const targetLabel = targetId ? ctx.sessionManager.getLabel(targetId) : undefined;
-		const summaryLabel = ctx.sessionManager.getLabel(event.summaryEntry.id);
-		const usedCheckpoint =
-			targetLabel === IMPLEMENTATION_CHECKPOINT_LABEL || summaryLabel === IMPLEMENTATION_CHECKPOINT_LABEL;
-
-		queueHiddenEvent(
-			usedCheckpoint
-				? `[TUTORIAL EVENT]\nThe user used /tree, navigated back to the labeled checkpoint "${IMPLEMENTATION_CHECKPOINT_LABEL}", and chose summarization. If the tutorial step "Rewind with /tree" is not already complete, mark it done with ${STEP_TOOL_NAME}.`
-				: `[TUTORIAL EVENT]\nThe user used /tree and chose summarization. If the tutorial step "Rewind with /tree" is not already complete, mark it done with ${STEP_TOOL_NAME}.`,
-		);
 	});
 
 	pi.on("before_agent_start", async () => {
