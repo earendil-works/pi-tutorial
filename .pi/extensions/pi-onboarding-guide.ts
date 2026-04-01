@@ -5,7 +5,7 @@ import { Type } from "@sinclair/typebox";
 
 const RELOAD_PENDING_KEY = Symbol.for("pi-tutorial.onboarding.reload-pending");
 
-const STEP_IDS = ["basics", "profile", "idea", "chat", "code", "tests", "extension", "iterate"] as const;
+const STEP_IDS = ["basics", "profile", "piFoundations", "piPermissions", "idea", "chat", "code", "tests", "extension", "iterate"] as const;
 type StepId = (typeof STEP_IDS)[number];
 
 const HINT_IDS = [
@@ -74,6 +74,28 @@ const STEPS: Record<StepId, StepMeta> = {
 		promptExamples: [
 			"Ask me 3 short onboarding questions first (language background, AI coding tool familiarity, interests).",
 			"Before we pick a project, please quickly profile my background and interests so you can tailor ideas.",
+		],
+	},
+	piFoundations: {
+		label: "Pi basics",
+		title: "Learn what makes Pi different (minimal prompt, 4 built-in tools, extensibility)",
+		hint: "The user was explicitly taught that Pi uses a minimal system prompt, has only four built-in tools (read/edit/write/bash), and is extended through extensions and skills.",
+		prompt:
+			"Before project selection, give me a short Pi-specific orientation: minimal system prompt, only read/edit/write/bash built-ins, and how extensions/skills extend capabilities.",
+		promptExamples: [
+			"Give me a quick Pi orientation: prompt model, built-in tools, and extensions/skills.",
+			"Explain in 3-5 bullets what makes Pi different from other coding agents.",
+		],
+	},
+	piPermissions: {
+		label: "Permissions model",
+		title: "Understand Pi's no-sandbox, full-permissions model",
+		hint: "The user was told clearly that Pi runs without sandboxing and with full permissions by design, and this was acknowledged before continuing.",
+		prompt:
+			"Also explain Pi's permission model: no sandbox, full permissions by design, and what practical care I should take when asking it to run commands.",
+		promptExamples: [
+			"Before we code, explain Pi's trust/permission model and how to use it responsibly.",
+			"Please give me the short version of Pi's no-sandbox model and safety expectations.",
 		],
 	},
 	idea: {
@@ -259,6 +281,10 @@ Rules:
 - If execution is optional, ask before running non-trivial commands or demos.
 - Before project selection, gather onboarding context: programming/language familiarity (including a non-programmer option), familiarity with AI coding tools, and interest areas.
 - If the user states a preferred programming language, carry that preference through project choice and implementation unless they ask to switch.
+- Teach Pi-specific concepts in separate mini-steps (not one long message):
+  1) minimal system prompt + only four built-in tools (read/edit/write/bash) + extensions/skills,
+  2) no sandboxing + full permissions by design.
+- Keep each onboarding response compact; avoid combining multiple tutorial steps into a single long reply.
 
 In your first reply:
 - Welcome the user.
@@ -266,7 +292,7 @@ In your first reply:
 - Briefly mention that you can read/edit/write files and run commands.
 - Ask 3 short onboarding questions (numbered) covering: language/background, AI coding tool familiarity, and interests.
 - Tell them they can answer in numbered form (1/2/3).
-- Say you will tailor project ideas based on their answers.`;
+- Say you will tailor project ideas based on their answers after two short Pi-orientation steps.`;
 }
 
 function getPiMascot(theme: Theme): string[] {
@@ -518,6 +544,41 @@ export default function onboardingGuideExtension(pi: ExtensionAPI) {
 		}),
 
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+			if (params.step === "piPermissions" && !completedSteps.includes("piFoundations")) {
+				const next = nextStep(completedSteps);
+				return {
+					content: [
+						{
+							type: "text",
+							text: [
+								`Cannot mark step done yet: ${STEPS.piPermissions.label}.`,
+								`First complete ${STEPS.piFoundations.label}.`,
+								next ? `Next incomplete step remains: ${STEPS[next].label}.` : "",
+							].filter(Boolean).join(" "),
+						},
+					],
+				};
+			}
+
+			if (params.step === "idea") {
+				const missing = ["profile", "piFoundations", "piPermissions"].filter((step) => !completedSteps.includes(step as StepId));
+				if (missing.length > 0) {
+					const next = nextStep(completedSteps);
+					return {
+						content: [
+							{
+								type: "text",
+								text: [
+									`Cannot mark step done yet: ${STEPS.idea.label}.`,
+									`Complete these first: ${missing.map((step) => STEPS[step as StepId].label).join(", ")}.`,
+									next ? `Next incomplete step remains: ${STEPS[next].label}.` : "",
+								].filter(Boolean).join(" "),
+							},
+						],
+					};
+				}
+			}
+
 			if (params.step === "iterate" && !completedSteps.includes("extension")) {
 				const next = nextStep(completedSteps);
 				return {
