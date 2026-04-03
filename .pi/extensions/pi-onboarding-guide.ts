@@ -242,6 +242,7 @@ function hasConversationMessages(ctx: ExtensionContext): boolean {
 
 const PLAN_REQUEST_RE = /\b(plan|planning|implementation plan|design|back[- ]?and[- ]?forth|clarify)\b/i;
 
+
 function messageContentToText(content: unknown): string {
 	if (typeof content === "string") return content;
 	if (!Array.isArray(content)) return "";
@@ -327,8 +328,9 @@ Rules:
 - Keep each onboarding response compact; avoid combining multiple tutorial steps into a single long reply.
 - Do not reveal internal tutorial framing in user-facing text (no "step", "orientation", "1/2", or "2/2"). Explain naturally and continue.
 - By default, after finishing a step, do not proactively perform the next step. Instead, coach the user how to ask for it and then wait.
-- Exception: when moving to "Pi basics" or "Pick project", ask one direct follow-up question to offer that next step now (do not ask the user to re-prompt Pi first).
-- Specifically: after "Pick project", do not start planning automatically. Wait for an explicit user planning request.
+- Exception: when moving to "Pi basics", "Pick project", or "Plan with Pi", ask one direct follow-up question to offer that next step now (do not ask the user to re-prompt Pi first).
+- Specifically: after "Pick project", do not start planning automatically. Instead, explain that Pi works best when you plan together first (back-and-forth), and offer to do that now. Show the user how to ask for it (e.g., "let's plan this together" or "do a back and forth with me"). Wait for their explicit go-ahead before starting the planning conversation.
+- During planning, ask one design question at a time. Do not propose a complete plan in your first planning message.
 
 In your first reply:
 - Welcome the user.
@@ -692,7 +694,7 @@ export default function onboardingGuideExtension(pi: ExtensionAPI) {
 			const nextPromptText = nextPromptExamples.length > 0
 				? ` Suggested prompts: ${nextPromptExamples.slice(0, 2).map((example) => `"${example}"`).join(" or ")}.`
 				: "";
-			const shouldAskDirectly = next === "piFoundations" || next === "idea";
+			const shouldAskDirectly = next === "piFoundations" || next === "idea" || next === "chat";
 			const nextStepCoaching = next
 				? shouldAskDirectly
 					? `In your next assistant message, ask one direct follow-up question offering ${STEPS[next].label} now. Do not ask the user to re-prompt Pi first.`
