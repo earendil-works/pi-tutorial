@@ -1,19 +1,8 @@
 # Pi Tutorial
 
-This repository contains an experimental interactive Pi tutorial extension.
-
-## Run with `pi -e`
-
-From this directory:
+This repository contains an experimental interactive Pi tutorial extension.  To
+test it, ensure you have a model loaded and run pi like this:
 
 ```bash
-pi -e .
+pi -e https://github.com/earendil-works/pi-tutorial
 ```
-
-Or from another project:
-
-```bash
-pi -e /Users/mitsuhiko/Development/pi-tutorial
-```
-
-This loads the extension defined in `package.json` (`pi-onboarding-guide.ts`).
