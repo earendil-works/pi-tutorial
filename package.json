@@ -1,0 +1,26 @@
+{
+  "name": "pi-tutorial",
+  "version": "0.1.0",
+  "description": "Interactive Pi tutorial extension",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/earendil-works/pi-tutorial.git"
+  },
+  "readme": "README.md",
+  "type": "module",
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "pi-tutorial"
+  ],
+  "pi": {
+    "extensions": [
+      "./pi-onboarding-guide.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@mariozechner/pi-coding-agent": "*",
+    "@mariozechner/pi-ai": "*",
+    "@mariozechner/pi-tui": "*"
+  }
+}

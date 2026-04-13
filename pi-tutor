@@ -1,0 +1,2 @@
+#!/bin/sh
+pi -e ./pi-onboarding-guide.ts
