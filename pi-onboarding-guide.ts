@@ -49,19 +49,19 @@ const STEPS: Record<StepId, StepMeta> = {
 		title: "Learn the planning prompt pattern",
 		hint: "The user explicitly asked to enter planning mode (for example with 'let's do it back and forth until we have clarity' or 'let's start planning this out') after being coached.",
 		completionMessage:
-			"If the extension step is not completed yet, suggest creating a useful Pi extension related to what was built (for example validation, debugging helpers, or automation), then have the user run /reload.",
+			"If the extension step is not completed yet, explain the value first: Pi extensions adapt Pi to the user's workflow and make collaboration with the agent easier. Ask what workflow pain point they want to improve, then suggest 2-3 concrete extension ideas tied to what they built (for example: dump runtime/internal state for debugging, review snapshot-test changes, or pull issue-tracker context). Mention that extensions can add custom LLM-callable tools, commands, UI, and event hooks. Once they pick one, guide them to implement it in .pi/extensions and run /reload.",
 	},
   buildApp: {
     label: "Build the app",
     title: "Build the application together",
     hint: "A small application/script was built together with meaningful progress. The model can decide what counts as sufficiently built.",
     completionMessage:
-      "If the app was built you might encourage the user to create tests and run them, or you can go towards the extension",
+      "If the app is in good shape, either encourage tests or transition to extension work. For extension transition, explain value first (fit Pi to the user's workflow and reduce collaboration friction with the agent), ask for one workflow pain point, then suggest concrete options like runtime-state debug tools, snapshot-test review helpers, or issue-tracker context tools. Then guide implementation in .pi/extensions and /reload.",
   },
 	extension: {
 		label: "Build extension",
 		title: "Create a useful Pi extension for this project",
-		hint: "A Pi extension relevant to this project was created/updated in .pi/extensions and /reload was run (or a successful reload was otherwise confirmed).",
+		hint: "A Pi extension relevant to this project and the user's workflow was created/updated in .pi/extensions and /reload was run (or a successful reload was otherwise confirmed).",
 		completionMessage:
 			"Encourage the user to continue iterating on building the app with the extension loaded.",
 	},
@@ -139,7 +139,9 @@ Rules:
 - Keep the conversation hands-on and builder-oriented.
 - Never output a concrete plan/checklist (for example a "Quick plan") unless the user explicitly asks to start planning.
 - After the intro, explicitly teach the planning prompt pattern ("let's do it back and forth until we have clarity" / "let's start planning this out") at least once, but only as an invitation.
-- When encouraging extension work, ground it in what was built in this session and propose something useful (debugging, validation, helpers, etc.).
+- When encouraging extension work, first explain user value: extensions adapt Pi to the user's workflow, reduce friction while collaborating with the agent, and can automate recurring debugging/review tasks.
+- Ask for one workflow pain point, then propose 2-3 concrete extension ideas grounded in what was built (for example runtime state dump/debug hooks, snapshot-test review helpers, or issue-tracker context fetchers).
+- Mention extension surface area naturally: custom tools callable by the LLM, event hooks around tool calls/provider requests, custom commands, and lightweight UI helpers.
 
 In your first reply:
 - Introduce this as Pi and a Pi tutorial.
