@@ -4,6 +4,7 @@ import { Box, Text, truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
 
 const RELOAD_PENDING_KEY = Symbol.for("pi-tutorial.onboarding.reload-pending");
+const RELOAD_DETECTION_WINDOW_MS = 60000;
 
 interface StepMeta {
 	label: string;
@@ -23,10 +24,16 @@ interface MarkStepDoneDetails {
 	nextStep?: StepId;
 }
 
+interface PendingTutorialEvent {
+	content: string;
+	id?: string;
+}
+
 const STEP_TOOL_NAME = "mark_step_done";
 const KICKOFF_MESSAGE_TYPE = "onboarding-guide-kickoff";
 const EVENT_MESSAGE_TYPE = "onboarding-guide-event";
 const ONBOARDING_STARTING_MESSAGE = "Hang on for a bit, I'm preparing a custom tour for you.";
+const EXTENSION_RELOAD_NUDGE_EVENT_ID = "tutorial-extension-reload-nudge";
 
 
 const STEP_IDS = ["intro", "chooseApp", "planning", "buildApp", "extension"] as const;
@@ -63,7 +70,7 @@ const STEPS: Record<StepId, StepMeta> = {
 		title: "Create a useful Pi extension for this project",
 		hint: "A Pi extension relevant to this project and the user's workflow was created/updated in .pi/extensions and /reload was run (or a successful reload was otherwise confirmed).",
 		completionMessage:
-			"Encourage the user to continue iterating on building the app with the extension loaded.",
+			"Encourage the user to continue iterating on building the app with the extension loaded. If their extension exposes an LLM-callable custom tool, remind them they can ask Pi to \"demo the extension\".",
 	},
 };
 
@@ -106,6 +113,22 @@ function hasUserMessages(ctx: ExtensionContext): boolean {
 	);
 }
 
+function hasHiddenTutorialEvent(ctx: ExtensionContext, eventId: string): boolean {
+	for (const entry of ctx.sessionManager.getEntries() as Array<{
+		type?: string;
+		customType?: string;
+		details?: { eventIds?: unknown };
+	}>) {
+		if (entry.type !== "custom" || entry.customType !== EVENT_MESSAGE_TYPE) continue;
+		const eventIds = entry.details?.eventIds;
+		if (!Array.isArray(eventIds)) continue;
+		if (eventIds.some((id) => id === eventId)) {
+			return true;
+		}
+	}
+	return false;
+}
+
 function formatStepList(): string {
 	return STEP_IDS.map((step, index) => `${index + 1}. ${STEPS[step].title}\n   Completion signal: ${STEPS[step].hint}`).join("\n");
 }
@@ -142,6 +165,7 @@ Rules:
 - When encouraging extension work, first explain user value: extensions adapt Pi to the user's workflow, reduce friction while collaborating with the agent, and can automate recurring debugging/review tasks.
 - Ask for one workflow pain point, then propose 2-3 concrete extension ideas grounded in what was built (for example runtime state dump/debug hooks, snapshot-test review helpers, or issue-tracker context fetchers).
 - Mention extension surface area naturally: custom tools callable by the LLM, event hooks around tool calls/provider requests, custom commands, and lightweight UI helpers.
+- After extension setup/reload, if a relevant custom tool is available, mention they can ask Pi to "demo the extension".
 
 In your first reply:
 - Introduce this as Pi and a Pi tutorial.
@@ -171,7 +195,7 @@ function getPiMascot(theme: Theme): string[] {
 
 export default function onboardingGuideExtension(pi: ExtensionAPI) {
 	let completedSteps: StepId[] = [];
-	let pendingTutorialEvents: string[] = [];
+	let pendingTutorialEvents: PendingTutorialEvent[] = [];
 	let kickoffSent = false;
 	let stepMarksThisTurn = 0;
 
@@ -370,10 +394,14 @@ export default function onboardingGuideExtension(pi: ExtensionAPI) {
 		);
 	};
 
-	const queueHiddenEvent = (content: string) => {
-		if (!pendingTutorialEvents.includes(content)) {
-			pendingTutorialEvents.push(content);
+	const queueHiddenEvent = (content: string, id?: string) => {
+		if (id && pendingTutorialEvents.some((event) => event.id === id)) {
+			return;
 		}
+		if (pendingTutorialEvents.some((event) => event.content === content)) {
+			return;
+		}
+		pendingTutorialEvents.push({ content, id });
 	};
 
 	pi.registerTool({
@@ -469,16 +497,36 @@ export default function onboardingGuideExtension(pi: ExtensionAPI) {
 		},
 	});
 
-	pi.on("session_start", async (_event, ctx) => {
+	pi.on("session_start", async (event, ctx) => {
 		refreshFromSession(ctx);
 		const globalObj = globalThis as Record<PropertyKey, unknown>;
 		const pendingReloadAt = globalObj[RELOAD_PENDING_KEY];
-		if (typeof pendingReloadAt === "number" && Date.now() - pendingReloadAt < 15000) {
+		const eventReason =
+			event && typeof event === "object" && "reason" in event ? (event as { reason?: unknown }).reason : undefined;
+		const hasRecentReloadMarker =
+			typeof pendingReloadAt === "number" && Date.now() - pendingReloadAt < RELOAD_DETECTION_WINDOW_MS;
+		const wasLikelyReload = eventReason === "reload" || hasRecentReloadMarker;
+
+		if (typeof pendingReloadAt === "number") {
 			delete globalObj[RELOAD_PENDING_KEY];
+		}
+
+		if (wasLikelyReload) {
 			queueHiddenEvent(
 				`[TUTORIAL EVENT]\nThe extension runtime just reloaded successfully (likely via /reload). Acknowledge this naturally if relevant. If the extension milestone is now satisfied and not already completed, mark it with ${STEP_TOOL_NAME}.`,
 			);
+
+			const extensionStepCompleted = completedSteps.includes("extension");
+			const extensionStepIsCurrent = !extensionStepCompleted && nextStep(completedSteps) === "extension";
+			const shouldNudgeExtensionTry = extensionStepCompleted || extensionStepIsCurrent;
+			if (shouldNudgeExtensionTry && !hasHiddenTutorialEvent(ctx, EXTENSION_RELOAD_NUDGE_EVENT_ID)) {
+				queueHiddenEvent(
+					`[TUTORIAL EVENT]\nThis is the first successful /reload after extension work. Tell the user once: "Now that you reloaded, you can try the extension." Keep it short and practical. If the extension exposes an LLM-callable tool, also mention they can ask Pi to "demo the extension".`,
+					EXTENSION_RELOAD_NUDGE_EVENT_ID,
+				);
+			}
 		}
+
 		maybeSendKickoff(ctx);
 		if (ctx.hasUI) {
 			ctx.ui.notify("Pi tutorial guide is active.", "info");
@@ -497,12 +545,17 @@ export default function onboardingGuideExtension(pi: ExtensionAPI) {
 	pi.on("before_agent_start", async () => {
 		stepMarksThisTurn = 0;
 		if (pendingTutorialEvents.length === 0) return;
-		const content = pendingTutorialEvents.join("\n\n");
+		const queuedEvents = pendingTutorialEvents;
 		pendingTutorialEvents = [];
+		const content = queuedEvents.map((event) => event.content).join("\n\n");
+		const eventIds = queuedEvents
+			.map((event) => event.id)
+			.filter((id): id is string => typeof id === "string" && id.length > 0);
 		return {
 			message: {
 				customType: EVENT_MESSAGE_TYPE,
 				content,
+				details: eventIds.length > 0 ? { eventIds } : undefined,
 				display: false,
 			},
 		};
