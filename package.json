@@ -7,6 +7,7 @@
     "url": "https://github.com/earendil-works/pi-tutorial.git"
   },
   "readme": "README.md",
+  "license": "Apache-2.0",
   "type": "module",
   "keywords": [
     "pi-package",
