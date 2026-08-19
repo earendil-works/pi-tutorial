@@ -2,6 +2,9 @@ import { StringEnum } from "@mariozechner/pi-ai";
 import type { ExtensionAPI, ExtensionContext, Theme } from "@mariozechner/pi-coding-agent";
 import { Box, Text, truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 
 const RELOAD_PENDING_KEY = Symbol.for("pi-tutorial.onboarding.reload-pending");
 const RELOAD_DETECTION_WINDOW_MS = 60000;
@@ -85,6 +88,29 @@ function orderedUniqueSteps(steps: Iterable<StepId>): StepId[] {
 
 function nextStep(completedSteps: StepId[]): StepId | undefined {
 	return STEP_IDS.find((step) => !completedSteps.includes(step));
+}
+
+const PROGRESS_DIR = path.join(os.homedir(), ".pi", "tutorial");
+const PROGRESS_FILE = path.join(PROGRESS_DIR, "progress.json");
+
+function loadProgress(): StepId[] {
+	try {
+		const raw = fs.readFileSync(PROGRESS_FILE, "utf8");
+		const parsed: unknown = JSON.parse(raw);
+		if (!Array.isArray(parsed)) return [];
+		return orderedUniqueSteps(parsed.filter(isStepId));
+	} catch {
+		return [];
+	}
+}
+
+function saveProgress(steps: StepId[]): void {
+	try {
+		fs.mkdirSync(PROGRESS_DIR, { recursive: true });
+		fs.writeFileSync(PROGRESS_FILE, JSON.stringify(steps, null, 2) + "\n", "utf8");
+	} catch {
+		// Persistence is best-effort; in-session progress still works.
+	}
 }
 
 function reconstructCompletedSteps(ctx: ExtensionContext): StepId[] {
@@ -374,7 +400,7 @@ export default function onboardingGuideExtension(pi: ExtensionAPI) {
 	};
 
 	const refreshFromSession = (ctx: ExtensionContext) => {
-		completedSteps = reconstructCompletedSteps(ctx);
+		completedSteps = orderedUniqueSteps([...reconstructCompletedSteps(ctx), ...loadProgress()]);
 		kickoffSent = (ctx.sessionManager.getBranch() as Array<{ type?: string; customType?: string }>).some(
 			(entry) => entry.type === "custom" && entry.customType === KICKOFF_MESSAGE_TYPE,
 		);
@@ -447,6 +473,7 @@ export default function onboardingGuideExtension(pi: ExtensionAPI) {
 			completedSteps = orderedUniqueSteps(current);
 			stepMarksThisTurn += 1;
 			renderFooter(ctx);
+			saveProgress(completedSteps);
 
 			const remainingSteps = STEP_IDS.filter((step) => !current.has(step));
 			const next = nextStep(completedSteps);
